@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WorkWatch</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="topbar">
+        <div>
+          <h1>WorkWatch</h1>
+          <p id="meta">Loading signatures...</p>
+        </div>
+        <button id="refresh" class="icon-button" title="Refresh signatures" aria-label="Refresh signatures">↻</button>
+      </header>
+
+      <section id="empty" class="empty" hidden>
+        <h2>No monitoring signals detected on this tab</h2>
+        <p>WorkWatch only reports matches from known vendor signatures. No match is not proof that a page is unmonitored.</p>
+      </section>
+
+      <section id="report" class="report" aria-live="polite"></section>
+
+      <footer class="actions">
+        <button id="clear">Clear tab</button>
+        <button id="options">Settings</button>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
