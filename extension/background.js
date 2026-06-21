@@ -3,10 +3,11 @@ importScripts("signatures.fallback.js");
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:5050";
 const MAX_EVIDENCE_PER_VENDOR = 8;
 const MAX_BEHAVIOR_EVENTS = 20;
+const MAX_HISTORY_EVENTS = 2000;
 let signatures = FALLBACK_SIGNATURES;
 
 chrome.runtime.onInstalled.addListener(async () => {
-	const existing = await chrome.storage.local.get(["settings", "detections"]);
+	const existing = await chrome.storage.local.get(["settings", "detections", "history"]);
 
 	if (!existing.settings)
 	{
@@ -18,6 +19,11 @@ chrome.runtime.onInstalled.addListener(async () => {
 		await chrome.storage.local.set({ detections: {} });
 	}
 
+	if (!existing.history)
+	{
+		await chrome.storage.local.set({ history: [] });
+	}
+
 	await refreshSignatures();
 });
 
@@ -27,6 +33,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (message.type === "getReport")
 	{
 		getReport(message.tabId).then(sendResponse);
+		return true;
+	}
+
+	if (message.type === "buildEvidencePackage")
+	{
+		buildEvidencePackage(message.filters || {}).then(sendResponse);
 		return true;
 	}
 
@@ -110,9 +122,12 @@ async function inspectRequest(details) {
 	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {}, behaviors: [] };
 	tabDetections.vendors ||= {};
 	tabDetections.behaviors ||= [];
+	const historyEntries = [];
 
 	for (const signature of matchingSignatures)
 	{
+		const timestamp = new Date(details.timeStamp || Date.now()).toISOString();
+		const hostname = hostnameFromUrl(details.url);
 		const vendor = signature.vendor;
 		const vendorRecord = tabDetections.vendors[vendor.slug] || {
 			vendor,
@@ -131,15 +146,33 @@ async function inspectRequest(details) {
 			url: redactUrl(details.url),
 			method: details.method,
 			resourceType: details.type,
-			time: new Date(details.timeStamp).toISOString()
+			time: timestamp
 		});
 		vendorRecord.evidence = vendorRecord.evidence.slice(0, MAX_EVIDENCE_PER_VENDOR);
 
 		tabDetections.vendors[vendor.slug] = vendorRecord;
+		historyEntries.push({
+			id: crypto.randomUUID(),
+			timestamp,
+			hostname,
+			vendorSlug: vendor.slug,
+			evidence: {
+				vendor,
+				confidence: signature.confidence,
+				label: signature.evidenceLabel,
+				url: redactUrl(details.url),
+				method: details.method,
+				resourceType: details.type,
+				signatureType: signature.type,
+				signaturePattern: signature.pattern,
+				time: timestamp
+			}
+		});
 	}
 
 	detections[tabKey] = tabDetections;
 	await chrome.storage.local.set({ detections });
+	await appendHistoryEntries(historyEntries);
 
 	chrome.action.setBadgeText({ 
 		tabId: details.tabId, 
@@ -166,14 +199,23 @@ async function recordBehaviorSignal(tab, detection) {
 		return { ok: true, duplicate: true };
 	}
 
-	tabDetections.behaviors.unshift({
+	const behavior = {
 		id: crypto.randomUUID(),
 		...detection,
 		report: behaviorReport(detection)
-	});
+	};
+
+	tabDetections.behaviors.unshift(behavior);
 	tabDetections.behaviors = tabDetections.behaviors.slice(0, MAX_BEHAVIOR_EVENTS);
 	detections[tabKey] = tabDetections;
 	await chrome.storage.local.set({ detections });
+	await appendHistoryEntries([{
+		id: crypto.randomUUID(),
+		timestamp: behavior.time || new Date().toISOString(),
+		hostname: hostnameFromUrl(behavior.pageUrl || tab.url || ""),
+		behaviorKind: behavior.kind,
+		evidence: behavior
+	}]);
 
 	chrome.action.setBadgeText({
 		tabId: tab.id,
@@ -238,6 +280,83 @@ async function getReport(tabId) {
 	};
 }
 
+async function buildEvidencePackage({ from, to, hostname } = {}) {
+	const { history = [] } = await chrome.storage.local.get("history");
+	const fromTime = parseBoundary(from, "from");
+	const toTime = parseBoundary(to, "to");
+	const normalizedHostname = normalizeHostname(hostname);
+	const matchingEntries = history.filter((entry) => {
+		const entryTime = Date.parse(entry.timestamp);
+		if (!Number.isFinite(entryTime)) return false;
+		if (fromTime !== null && entryTime < fromTime) return false;
+		if (toTime !== null && entryTime > toTime) return false;
+		if (normalizedHostname && normalizeHostname(entry.hostname) !== normalizedHostname) return false;
+		return true;
+	});
+	const findingsByVendor = new Map();
+	const behaviors = [];
+
+	for (const entry of matchingEntries)
+	{
+		if (entry.vendorSlug)
+		{
+			const vendor = entry.evidence?.vendor || { slug: entry.vendorSlug, name: entry.vendorSlug };
+			const existing = findingsByVendor.get(entry.vendorSlug) || {
+				vendor,
+				confidence: entry.evidence?.confidence || "low",
+				firstSeen: entry.timestamp,
+				lastSeen: entry.timestamp,
+				count: 0,
+				evidence: []
+			};
+
+			existing.vendor = vendor;
+			existing.confidence = strongestConfidence(existing.confidence, entry.evidence?.confidence || "low");
+			existing.firstSeen = earlierIso(existing.firstSeen, entry.timestamp);
+			existing.lastSeen = laterIso(existing.lastSeen, entry.timestamp);
+			existing.count += 1;
+			existing.evidence.push({
+				historyId: entry.id,
+				hostname: entry.hostname,
+				...entry.evidence
+			});
+			findingsByVendor.set(entry.vendorSlug, existing);
+			continue;
+		}
+
+		if (entry.behaviorKind)
+		{
+			const evidence = entry.evidence || {};
+			behaviors.push({
+				kind: entry.behaviorKind,
+				severity: evidence.severity || "low",
+				time: entry.timestamp,
+				report: evidence.report || behaviorReport(evidence),
+				callSite: evidence.callSite || "",
+				hostname: entry.hostname,
+				evidence
+			});
+		}
+	}
+
+	const findings = Array.from(findingsByVendor.values())
+		.sort((a, b) => Date.parse(a.firstSeen) - Date.parse(b.firstSeen));
+	behaviors.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+
+	return {
+		generatedAt: new Date().toISOString(),
+		dateRange: {
+			from: from || null,
+			to: to || null
+		},
+		site: normalizedHostname || "all sites",
+		summary: findings.map(toPlainEnglish),
+		findings,
+		behaviors,
+		integrityHash: await sha256(JSON.stringify([...findings, ...behaviors]))
+	};
+}
+
 async function clearTab(tabId) {
 	const { detections = {} } = await chrome.storage.local.get("detections");
 	delete detections[String(tabId)];
@@ -294,6 +413,61 @@ function humanList(items) {
 function strongestConfidence(left, right) {
 	const rank = { low: 1, medium: 2, high: 3 };
 	return rank[right] > rank[left] ? right : left;
+}
+
+function parseBoundary(value, boundary) {
+	if (!value) return null;
+
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return null;
+
+	if (boundary === "to" && /^\d{4}-\d{2}-\d{2}$/.test(value))
+	{
+		date.setUTCHours(23, 59, 59, 999);
+	}
+
+	return date.getTime();
+}
+
+function normalizeHostname(value) {
+	const trimmed = String(value || "").trim().toLowerCase().replace(/^\.+|\.+$/g, "");
+	if (!trimmed) return "";
+
+	try {
+		return new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).hostname.toLowerCase();
+	} catch {
+		return trimmed;
+	}
+}
+
+function earlierIso(left, right) {
+	return Date.parse(right) < Date.parse(left) ? right : left;
+}
+
+function laterIso(left, right) {
+	return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+async function sha256(value) {
+	const bytes = new TextEncoder().encode(value);
+	const digest = await crypto.subtle.digest("SHA-256", bytes);
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function appendHistoryEntries(entries) {
+	if (!entries.length) return;
+
+	const { history = [] } = await chrome.storage.local.get("history");
+	history.push(...entries);
+	await chrome.storage.local.set({ history: history.slice(-MAX_HISTORY_EVENTS) });
+}
+
+function hostnameFromUrl(url) {
+	try {
+		return new URL(url).hostname.toLowerCase();
+	} catch {
+		return "";
+	}
 }
 
 function redactUrl(url) {

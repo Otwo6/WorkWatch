@@ -20,6 +20,26 @@
         </label>
         <button type="submit">Save</button>
       </form>
+      <section class="export-panel" aria-labelledby="export-title">
+        <h2 id="export-title">Evidence Export</h2>
+        <form id="export-form">
+          <label>
+            Site hostname
+            <input id="export-hostname" type="text" placeholder="example.com">
+          </label>
+          <div class="date-grid">
+            <label>
+              From
+              <input id="export-from" type="date">
+            </label>
+            <label>
+              To
+              <input id="export-to" type="date">
+            </label>
+          </div>
+          <button type="submit">Download JSON</button>
+        </form>
+      </section>
       <p id="status" role="status"></p>
     </main>
     <script src="options.js"></script>
