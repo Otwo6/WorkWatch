@@ -16,9 +16,13 @@ async function currentTab() {
 }
 
 async function loadReport() {
-  const tab = await currentTab();
-  const response = await chrome.runtime.sendMessage({ type: "getReport", tabId: tab.id });
+  const response = await chrome.runtime.sendMessage({ type: "getReport" });
   render(response);
+}
+
+async function clearCurrentTab() {
+  await chrome.runtime.sendMessage({ type: "clearAll" });
+  await loadReport();
 }
 
 async function refreshSignatures() {
@@ -26,12 +30,6 @@ async function refreshSignatures() {
   const result = await chrome.runtime.sendMessage({ type: "refreshSignatures" });
   refreshButton.disabled = false;
   metaEl.textContent = signatureMetaText(result);
-  await loadReport();
-}
-
-async function clearCurrentTab() {
-  const tab = await currentTab();
-  await chrome.runtime.sendMessage({ type: "clearTab", tabId: tab.id });
   await loadReport();
 }
 

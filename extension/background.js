@@ -36,6 +36,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		return true;
 	}
 
+	if (message.type === "clearAll")
+	{
+		clearAll().then(sendResponse);
+		return true;
+	}
+
 	if (message.type === "buildEvidencePackage")
 	{
 		buildEvidencePackage(message.filters || {}).then(sendResponse);
@@ -112,121 +118,99 @@ async function refreshSignatures() {
 }
 
 async function inspectRequest(details) {
-	if (details.tabId < 0) return;
+  if (details.tabId < 0) return;
 
-	const matchingSignatures = signatures.filter((signature) => matches(details, signature));
-	if (!matchingSignatures.length) return;
+  const matchingSignatures = signatures.filter((signature) => matches(details, signature));
+  if (!matchingSignatures.length) return;
 
-	const { detections = {} } = await chrome.storage.local.get("detections");
-	const tabKey = String(details.tabId);
-	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {}, behaviors: [] };
-	tabDetections.vendors ||= {};
-	tabDetections.behaviors ||= [];
-	const historyEntries = [];
+  const { detections = { vendors: {}, behaviors: [] } } = await chrome.storage.local.get("detections");
+  detections.vendors ||= {};
+  detections.behaviors ||= [];
+  const historyEntries = [];
 
-	for (const signature of matchingSignatures)
-	{
-		const timestamp = new Date(details.timeStamp || Date.now()).toISOString();
-		const hostname = hostnameFromUrl(details.url);
-		const vendor = signature.vendor;
-		const vendorRecord = tabDetections.vendors[vendor.slug] || {
-			vendor,
-			firstSeen: new Date().toISOString(),
-			lastSeen: null,
-			count: 0,
-			confidence: signature.confidence,
-			evidence: []
-		};
+  for (const signature of matchingSignatures)
+  {
+    const timestamp = new Date(details.timeStamp || Date.now()).toISOString();
+    const hostname = hostnameFromUrl(details.url);
+    const vendor = signature.vendor;
+    const vendorRecord = detections.vendors[vendor.slug] || {
+      vendor,
+      firstSeen: new Date().toISOString(),
+      lastSeen: null,
+      count: 0,
+      confidence: signature.confidence,
+      evidence: []
+    };
 
-		vendorRecord.lastSeen = new Date().toISOString();
-		vendorRecord.count += 1;
-		vendorRecord.confidence = strongestConfidence(vendorRecord.confidence, signature.confidence);
-		vendorRecord.evidence.unshift({
-			label: signature.evidenceLabel,
-			url: redactUrl(details.url),
-			method: details.method,
-			resourceType: details.type,
-			time: timestamp
-		});
-		vendorRecord.evidence = vendorRecord.evidence.slice(0, MAX_EVIDENCE_PER_VENDOR);
+    vendorRecord.lastSeen = new Date().toISOString();
+    vendorRecord.count += 1;
+    vendorRecord.confidence = strongestConfidence(vendorRecord.confidence, signature.confidence);
+    vendorRecord.evidence.unshift({
+      label: signature.evidenceLabel,
+      url: redactUrl(details.url),
+      method: details.method,
+      resourceType: details.type,
+      time: timestamp
+    });
+    vendorRecord.evidence = vendorRecord.evidence.slice(0, MAX_EVIDENCE_PER_VENDOR);
 
-		tabDetections.vendors[vendor.slug] = vendorRecord;
-		historyEntries.push({
-			id: crypto.randomUUID(),
-			timestamp,
-			hostname,
-			vendorSlug: vendor.slug,
-			evidence: {
-				vendor,
-				confidence: signature.confidence,
-				label: signature.evidenceLabel,
-				url: redactUrl(details.url),
-				method: details.method,
-				resourceType: details.type,
-				signatureType: signature.type,
-				signaturePattern: signature.pattern,
-				time: timestamp
-			}
-		});
-	}
+    detections.vendors[vendor.slug] = vendorRecord;
+    historyEntries.push({
+      id: crypto.randomUUID(),
+      timestamp,
+      hostname,
+      vendorSlug: vendor.slug,
+      evidence: { vendor, confidence: signature.confidence, label: signature.evidenceLabel, url: redactUrl(details.url), method: details.method, resourceType: details.type, signatureType: signature.type, signaturePattern: signature.pattern, time: timestamp }
+    });
+  }
 
-	detections[tabKey] = tabDetections;
-	await chrome.storage.local.set({ detections });
-	await appendHistoryEntries(historyEntries);
+  await chrome.storage.local.set({ detections });
+  await appendHistoryEntries(historyEntries);
+  await broadcastBadge(detections);
+}
 
-	chrome.action.setBadgeText({ 
-		tabId: details.tabId, 
-		text: String(detectionCount(tabDetections))
-	}).catch((err) => console.log("Badge update skipped. Tab probably closed.", err.message));
-
-	chrome.action.setBadgeBackgroundColor({ 
-		tabId: details.tabId, 
-		color: "#B42318" 
-	}).catch((err) => {/* Ignore */});
+async function broadcastBadge(detections) {
+  const count = Object.keys(detections.vendors || {}).length + (detections.behaviors || []).length;
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    chrome.action.setBadgeText({ tabId: tab.id, text: count ? String(count) : "" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#B42318" }).catch(() => {});
+  }
 }
 
 async function recordBehaviorSignal(tab, detection) {
-	if (!tab || tab.id < 0 || !detection) return { ok: false };
+  if (!tab || tab.id < 0 || !detection) return { ok: false };
 
-	const { detections = {} } = await chrome.storage.local.get("detections");
-	const tabKey = String(tab.id);
-	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {}, behaviors: [] };
-	tabDetections.vendors ||= {};
-	tabDetections.behaviors ||= [];
+  const { detections = { vendors: {}, behaviors: [] } } = await chrome.storage.local.get("detections");
+  detections.vendors ||= {};
+  detections.behaviors ||= [];
 
-	if (isDuplicateBehavior(tabDetections.behaviors, detection))
-	{
-		return { ok: true, duplicate: true };
-	}
+  if (isDuplicateBehavior(detections.behaviors, detection))
+  {
+    return { ok: true, duplicate: true };
+  }
 
-	const behavior = {
-		id: crypto.randomUUID(),
-		...detection,
-		report: behaviorReport(detection)
-	};
+  const behavior = {
+    id: crypto.randomUUID(),
+    ...detection,
+    report: behaviorReport(detection)
+  };
 
-	tabDetections.behaviors.unshift(behavior);
-	tabDetections.behaviors = tabDetections.behaviors.slice(0, MAX_BEHAVIOR_EVENTS);
-	detections[tabKey] = tabDetections;
-	await chrome.storage.local.set({ detections });
-	await appendHistoryEntries([{
-		id: crypto.randomUUID(),
-		timestamp: behavior.time || new Date().toISOString(),
-		hostname: hostnameFromUrl(behavior.pageUrl || tab.url || ""),
-		behaviorKind: behavior.kind,
-		evidence: behavior
-	}]);
+  detections.behaviors.unshift(behavior);
+  detections.behaviors = detections.behaviors.slice(0, MAX_BEHAVIOR_EVENTS);
+  await chrome.storage.local.set({ detections });
 
-	chrome.action.setBadgeText({
-		tabId: tab.id,
-		text: String(detectionCount(tabDetections))
-	}).catch(() => {});
-	chrome.action.setBadgeBackgroundColor({
-		tabId: tab.id,
-		color: detection.severity === "high" ? "#B42318" : "#B7791F"
-	}).catch(() => {});
+  await appendHistoryEntries([{
+    id: crypto.randomUUID(),
+    timestamp: behavior.time || new Date().toISOString(),
+    hostname: hostnameFromUrl(behavior.pageUrl || tab.url || ""),
+    behaviorKind: behavior.kind,
+    evidence: behavior
+  }]);
 
-	return { ok: true };
+  await broadcastBadge(detections);
+
+  return { ok: true };
 }
 
 function matches(details, signature) {
@@ -266,18 +250,11 @@ function matches(details, signature) {
 	}
 }
 
-async function getReport(tabId) {
-	const { detections = {}, signatureMeta = { source: "fallback", count: signatures.length } } = await chrome.storage.local.get(["detections", "signatureMeta"]);
-	const tabDetections = detections[String(tabId)] || { vendors: {} };
-	const vendors = Object.values(tabDetections.vendors || {});
-	const behaviors = tabDetections.behaviors || [];
-	
-	return {
-		vendors,
-		behaviors,
-		summary: vendors.map(toPlainEnglish),
-		signatureMeta
-	};
+async function getReport() {
+  const { detections = { vendors: {}, behaviors: [] }, signatureMeta = { source: "fallback", count: signatures.length } } = await chrome.storage.local.get(["detections", "signatureMeta"]);
+  const vendors = Object.values(detections.vendors || {});
+  const behaviors = detections.behaviors || [];
+  return { vendors, behaviors, summary: vendors.map(toPlainEnglish), signatureMeta };
 }
 
 async function buildEvidencePackage({ from, to, hostname } = {}) {
@@ -364,6 +341,15 @@ async function clearTab(tabId) {
 
 	await chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
 	return { ok: true };
+}
+
+async function clearAll() {
+  await chrome.storage.local.set({ detections: { vendors: {}, behaviors: [] } });
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    chrome.action.setBadgeText({ tabId: tab.id, text: "" }).catch(() => {});
+  }
+  return { ok: true };
 }
 
 function toPlainEnglish(record) {

@@ -12,12 +12,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   useBackend.checked = settings.useBackend;
   backendUrl.value = settings.backendUrl || "http://127.0.0.1:5050";
 
-  try {
+  /*try {
     const { lastActiveHostname } = await chrome.storage.local.get("lastActiveHostname");
     exportHostname.value = lastActiveHostname || "";
   } catch {
     exportHostname.value = "";
-  }
+  }*/
 });
 
 form.addEventListener("submit", async (event) => {
@@ -38,7 +38,7 @@ exportForm.addEventListener("submit", async (event) => {
 
   try {
     const filters = {
-      hostname: exportHostname.value.trim(),
+      hostname: "",
       from: exportFrom.value || null,
       to: exportTo.value || null
     };
