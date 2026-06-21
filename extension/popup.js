@@ -35,6 +35,21 @@ async function clearCurrentTab() {
   await loadReport();
 }
 
+optionsButton.addEventListener("click", async () => {
+  const tab = await currentTab();
+  const hostname = tab?.url ? safeHostname(tab.url) : "";
+  await chrome.storage.local.set({ lastActiveHostname: hostname });
+  chrome.runtime.openOptionsPage();
+});
+
+function safeHostname(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
 function render(report) {
   const vendors = report.vendors || [];
   const behaviors = report.behaviors || [];

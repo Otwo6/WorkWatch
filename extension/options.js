@@ -13,11 +13,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   backendUrl.value = settings.backendUrl || "http://127.0.0.1:5050";
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url)
-    {
-      exportHostname.value = new URL(tab.url).hostname;
-    }
+    const { lastActiveHostname } = await chrome.storage.local.get("lastActiveHostname");
+    exportHostname.value = lastActiveHostname || "";
   } catch {
     exportHostname.value = "";
   }
