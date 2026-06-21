@@ -33,7 +33,16 @@
               <input id="export-to" type="date">
             </label>
           </div>
-          <button type="submit">Download JSON</button>
+          
+          <label>
+            Format
+            <select id="export-format">
+              <option value="json">Raw Data (JSON)</option>
+              <option value="print">Print / Save as PDF (Browser)</option>
+            </select>
+          </label>
+
+          <button type="submit">Export Report</button>
         </form>
       </section>
       <p id="status" role="status"></p>
