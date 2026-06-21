@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WorkWatch Behavioral Test Lab</title>
+</head>
+<body>
+    <h1>WorkWatch Behavioral Test Lab</h1>
+    <p>Use the buttons below to fake suspicious software tracking actions.</p>
+    
+    <button id="screenBtn">Simulate Screen Capture Request</button>
+    <button id="heartbeatBtn">Start 2-Second Network Heartbeat</button>
+    <button id="keyBtn">Attach 3 Global Keylog Listeners</button>
+
+    <script>
+        // Test 1: Trigger the Screen Capture API hook
+        document.getElementById('screenBtn').addEventListener('click', async () => {
+            try {
+                await navigator.mediaDevices.getDisplayMedia({ video: true });
+            } catch (e) {
+                console.log("Screen share closed or denied, but hook should have fired!");
+            }
+        });
+
+        // Test 2: Trigger the network heartbeat heuristic loop
+        document.getElementById('heartbeatBtn').addEventListener('click', () => {
+            let count = 0;
+            const interval = setInterval(() => {
+                // Fetch to an imaginary local endpoint every 2 seconds
+                fetch(`http://imaginary-tracker-endpoint.local/sync?tick=${count++}`).catch(() => {});
+                if (count >= 5) {
+                    clearInterval(interval);
+                    console.log("Heartbeat sequence complete.");
+                }
+            }, 2000);
+        });
+
+        // Test 3: Trigger the multiple keydown listener anomaly
+        document.getElementById('keyBtn').addEventListener('click', () => {
+            window.addEventListener('keydown', () => {});
+            window.addEventListener('keydown', () => {});
+            window.addEventListener('keydown', () => {});
+            console.log("3 global keydown listeners registered.");
+        });
+    </script>
+</body>
+</html>

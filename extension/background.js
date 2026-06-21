@@ -2,6 +2,7 @@ importScripts("signatures.fallback.js");
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:5050";
 const MAX_EVIDENCE_PER_VENDOR = 8;
+const MAX_BEHAVIOR_EVENTS = 20;
 let signatures = FALLBACK_SIGNATURES;
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -52,6 +53,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 		chrome.storage.local.get("settings").then((data) => sendResponse(data.settings || { backendUrl: DEFAULT_BACKEND_URL, useBackend: true }));
 		return true;
 	}
+
+	if (message.type === "behaviorSignal")
+	{
+		recordBehaviorSignal(sender.tab, message.detection).then(sendResponse);
+		return true;
+	}
 	
 	return false;
 });
@@ -100,7 +107,9 @@ async function inspectRequest(details) {
 
 	const { detections = {} } = await chrome.storage.local.get("detections");
 	const tabKey = String(details.tabId);
-	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {} };
+	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {}, behaviors: [] };
+	tabDetections.vendors ||= {};
+	tabDetections.behaviors ||= [];
 
 	for (const signature of matchingSignatures)
 	{
@@ -134,13 +143,48 @@ async function inspectRequest(details) {
 
 	chrome.action.setBadgeText({ 
 		tabId: details.tabId, 
-		text: String(Object.keys(tabDetections.vendors).length) 
+		text: String(detectionCount(tabDetections))
 	}).catch((err) => console.log("Badge update skipped. Tab probably closed.", err.message));
 
 	chrome.action.setBadgeBackgroundColor({ 
 		tabId: details.tabId, 
 		color: "#B42318" 
 	}).catch((err) => {/* Ignore */});
+}
+
+async function recordBehaviorSignal(tab, detection) {
+	if (!tab || tab.id < 0 || !detection) return { ok: false };
+
+	const { detections = {} } = await chrome.storage.local.get("detections");
+	const tabKey = String(tab.id);
+	const tabDetections = detections[tabKey] || { firstSeen: new Date().toISOString(), vendors: {}, behaviors: [] };
+	tabDetections.vendors ||= {};
+	tabDetections.behaviors ||= [];
+
+	if (isDuplicateBehavior(tabDetections.behaviors, detection))
+	{
+		return { ok: true, duplicate: true };
+	}
+
+	tabDetections.behaviors.unshift({
+		id: crypto.randomUUID(),
+		...detection,
+		report: behaviorReport(detection)
+	});
+	tabDetections.behaviors = tabDetections.behaviors.slice(0, MAX_BEHAVIOR_EVENTS);
+	detections[tabKey] = tabDetections;
+	await chrome.storage.local.set({ detections });
+
+	chrome.action.setBadgeText({
+		tabId: tab.id,
+		text: String(detectionCount(tabDetections))
+	}).catch(() => {});
+	chrome.action.setBadgeBackgroundColor({
+		tabId: tab.id,
+		color: detection.severity === "high" ? "#B42318" : "#B7791F"
+	}).catch(() => {});
+
+	return { ok: true };
 }
 
 function matches(details, signature) {
@@ -184,9 +228,11 @@ async function getReport(tabId) {
 	const { detections = {}, signatureMeta = { source: "fallback", count: signatures.length } } = await chrome.storage.local.get(["detections", "signatureMeta"]);
 	const tabDetections = detections[String(tabId)] || { vendors: {} };
 	const vendors = Object.values(tabDetections.vendors || {});
+	const behaviors = tabDetections.behaviors || [];
 	
 	return {
 		vendors,
+		behaviors,
 		summary: vendors.map(toPlainEnglish),
 		signatureMeta
 	};
@@ -204,6 +250,39 @@ async function clearTab(tabId) {
 function toPlainEnglish(record) {
 	const data = humanList(record.vendor.dataCollected || []);
 	return `Your employer appears to be using ${record.vendor.name}, which can collect ${data}.`;
+}
+
+function behaviorReport(detection) {
+	if (detection.kind === "screen_capture_request")
+	{
+		return detection.userActivation
+			? "This page requested screen sharing after a recent user action. That can expose visible windows, tabs, or the entire screen if permission is granted."
+			: "This page requested screen sharing without a visible user action. That can expose visible windows, tabs, or the entire screen if permission is granted.";
+	}
+
+	if (detection.kind === "global_keyboard_listener")
+	{
+		return `This page attached a global ${detection.eventType || "keyboard"} listener. Global keyboard listeners can observe typed keys and shortcuts while the page is focused.`;
+	}
+
+	return "This page used a sensitive browser feature that may expose private activity.";
+}
+
+function isDuplicateBehavior(existing, detection) {
+	return existing.some((item) => {
+		if (item.kind !== detection.kind) return false;
+		if (item.eventType !== detection.eventType) return false;
+		if (item.target !== detection.target) return false;
+		if (item.callSite !== detection.callSite) return false;
+
+		const itemTime = Date.parse(item.time);
+		const detectionTime = Date.parse(detection.time);
+		return Number.isFinite(itemTime) && Number.isFinite(detectionTime) && Math.abs(itemTime - detectionTime) < 5000;
+	});
+}
+
+function detectionCount(tabDetections) {
+	return Object.keys(tabDetections.vendors || {}).length + (tabDetections.behaviors || []).length;
 }
 
 function humanList(items) {

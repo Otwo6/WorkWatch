@@ -114,6 +114,10 @@ h2 {
   border-left-color: var(--warning);
 }
 
+.behavior {
+  background: #fffdf7;
+}
+
 .finding-header {
   align-items: center;
   display: flex;
