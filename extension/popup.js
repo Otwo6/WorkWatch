@@ -8,7 +8,13 @@ const optionsButton = document.querySelector("#options");
 document.addEventListener("DOMContentLoaded", loadReport);
 refreshButton.addEventListener("click", refreshSignatures);
 clearButton.addEventListener("click", clearCurrentTab);
-optionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+optionsButton.addEventListener("click", async () => {
+  const tab = await currentTab();
+  const hostname = tab?.url ? safeHostname(tab.url) : "";
+  await chrome.storage.local.set({ lastActiveHostname: hostname });
+  chrome.runtime.openOptionsPage();
+});
 
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -32,13 +38,6 @@ async function refreshSignatures() {
   metaEl.textContent = signatureMetaText(result);
   await loadReport();
 }
-
-optionsButton.addEventListener("click", async () => {
-  const tab = await currentTab();
-  const hostname = tab?.url ? safeHostname(tab.url) : "";
-  await chrome.storage.local.set({ lastActiveHostname: hostname });
-  chrome.runtime.openOptionsPage();
-});
 
 function safeHostname(url) {
   try {
@@ -115,7 +114,12 @@ function categoryLabel(category) {
   return {
     employee_monitoring: "Employee monitoring",
     productivity_tracking: "Productivity tracking",
-    identity_verification: "Identity verification"
+    identity_verification: "Identity verification",
+    background_check: "Background check",
+    insider_threat_dlp: "Insider threat / DLP",
+    call_center_monitoring: "Call-center monitoring",
+    session_replay: "Session replay",
+    fleet_tracking: "Fleet / location tracking"
   }[category] || "Monitoring signal";
 }
 

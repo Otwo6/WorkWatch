@@ -1,11 +1,29 @@
 CREATE DATABASE IF NOT EXISTS workwatch CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE workwatch;
 
+-- If you already have a `vendors` table from before this category list grew,
+-- run this once instead of re-creating the table:
+--
+-- ALTER TABLE vendors MODIFY category ENUM(
+--   'employee_monitoring','productivity_tracking','identity_verification',
+--   'background_check','insider_threat_dlp','call_center_monitoring',
+--   'session_replay','fleet_tracking'
+-- ) NOT NULL;
+
 CREATE TABLE IF NOT EXISTS vendors (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   slug VARCHAR(120) NOT NULL,
   name VARCHAR(180) NOT NULL,
-  category ENUM('employee_monitoring','productivity_tracking','identity_verification') NOT NULL,
+  category ENUM(
+    'employee_monitoring',
+    'productivity_tracking',
+    'identity_verification',
+    'background_check',
+    'insider_threat_dlp',
+    'call_center_monitoring',
+    'session_replay',
+    'fleet_tracking'
+  ) NOT NULL,
   description TEXT NOT NULL,
   data_collected JSON NOT NULL,
   reference_url VARCHAR(500) NULL,
